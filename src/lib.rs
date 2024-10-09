@@ -1,203 +1,185 @@
-//! lug is a tokio based actor framework created for the Rivelin Project.
+//! lug is an in-process type safe event-bus bus that uses Rust types to define topics and subtopics.
 //!
-//! ## Actor implementations
+//! ## Topics
+//! The [Topic] trait can be implemented to define a topic.
 //!
-//! Some reusable actor implementations are provided to get you started.
-//!
-//! - [EventBus](crate::event_bus): a pub/sub event bus that can be used to send messages between actors.
-//!
-//! ## Implement your own
-//!
-//! ```
+//! ```rust
 //! # use tokio_test;
-//! # use lug::Actor;
-//! # use lug::Addr;
-
-//! // Create a simple actor that prints a message
-//! struct HelloActor;
+//! use lug::{EventBus, Topic, Filter};
 //!
-//! // Implement the Actor trait for HelloWorldActor
-//! impl Actor for HelloActor {
-//!     type Message = String;
-//!     type State = ();
+//! struct HelloTopic;
 //!
-//!     async fn handle(&self, message: Self::Message, _: &mut Self::State) {
-//!         println!("Hello {}", message);
-//!     }
+//! impl Topic for HelloTopic {
+//!     type MessageType = String;
 //! }
 //!
 //! # tokio_test::block_on(async {
-//! // Spawn an actor.
-//! // The address can be cheaply cloned.
-//! let (addr, handle): (Addr<HelloActor>, _) = Actor::spawn(HelloActor, ());
+//! // Create an EventBus
+//! let (addr, handle) = EventBus::spawn(100);
 //!
-//! // Drop addr.
-//! // Because no clones exist the actor can no longer receive messages and will gracefully shutdown.
-//! drop(addr);
+//! // Subscribe to the topic
+//! let mut consumer = addr
+//!     .consumer::<HelloTopic>()
+//!     .await
+//!     .unwrap();
 //!
-//! // Wait for the actor to finish processing messages
-//! handle.await.unwrap();
+//! // Create a producer for the topic and send a message
+//! let producer = addr.producer(HelloTopic);
+//! producer
+//!     .send("Hello from topic a".to_string())
+//!     .await
+//!     .unwrap();
+//!
+//! // Receive a message from the topic
+//! let res = consumer.recv().await.unwrap();
+//! let value = res.as_ref();
+//!
+//! assert_eq!(value, &"Hello from topic a".to_string());
+//! // Stop the actor
+//! handle.graceful_shutdown().await.unwrap();
+//!
+//! # })
+//! ```
+//!
+//! ## Subtopics
+//!
+//! Structs that implement [Topic] can have fields. The value of these fields define "subtopics".
+//!
+//! Subtopics allow for more fine grained control over which messages a [Consumer] receives. A consumer could receive
+//! all messages for a topic, or filter messages by subtopic.
+//! When creating a consumer, a function or closure is passed which defines the rule for filtering subtopics.
+//!
+//! This is similar to the concept of a [`routing_keys`](https://www.rabbitmq.com/tutorials/tutorial-five-python#topic-exchange) in RabbitMQ,
+//! except rather than using a string to filter the consumers messages, we use create arbitrary filtering rules passed as closures.
+//! This provides both type safety and flexibility.
+//!
+//! ```rust
+//! # use tokio_test;
+//! # use lug::{EventBus, Topic, Filter};
+//! struct SubTopics {
+//!    a: u32,
+//!    b: u32,
+//! };
+//!
+//! impl Topic for SubTopics {
+//!     type MessageType = &'static str;
+//! }
+//!
+//! # tokio_test::block_on(async {
+//! let (addr, handle) = EventBus::spawn(100);
+//!
+//! // These are two different topics
+//! let topic_a = SubTopics { a: 1, b: 1 };
+//! let topic_b = SubTopics { a: 1, b: 2 };
+//!
+//! let producer_1 = addr.producer(topic_a);
+//! let producer_2 = addr.producer(topic_b);
+//!
+//! // consumer_a will receive all messages
+//! let mut consumer_a = addr
+//!     .consumer::<SubTopics>()
+//!     .await
+//!     .unwrap();
+//!
+//! // consumer_b will receive all messages where the topic.b == 2
+//! let mut consumer_b = addr.consumer_with_filter(|t: &SubTopics| t.b == 2).await.unwrap();
+//!
+//! producer_1.send("This is subtopic_a").await.unwrap();
+//! producer_2.send("This is subtopic_b").await.unwrap();
+//!
+//! assert_eq!(
+//!     *consumer_a.recv().await.unwrap().as_ref(),
+//!     "This is subtopic_a"
+//! );
+//! assert_eq!(
+//!     *consumer_a.recv().await.unwrap().as_ref(),
+//!     "This is subtopic_b"
+//! );
+//!
+//! assert_eq!(
+//!     *consumer_b.recv().await.unwrap().as_ref(),
+//!     "This is subtopic_b"
+//! );
+//!
+//! handle.graceful_shutdown().await.unwrap();
+//! # })
+//! ```
+//!
+//! ## Enum Subtopics
+//!
+//! You can also use enums to define subtopics. In this example there is a single type called `EnumSubTopic` which defines
+//! subtopics as enum variants and associated data. Remember that while enum variants and data define subtopics, only the type
+//! (in this case `EnumSubTopic`) defines the topic.
+//!
+//! ```rust
+//! # use tokio_test;
+//! # use lug::{EventBus, Topic, Filter};
+//! # #[allow(dead_code)]
+//! enum EnumSubTopic {
+//!     A,
+//!     B { a: &'static str },
+//! }
+//!
+//! impl Topic for EnumSubTopic {
+//!     type MessageType = u32;
+//! }
+//! # tokio_test::block_on(async {
+//! # let (addr, _handle) = EventBus::spawn(100);
+//!
+//! let producer_a = addr.producer(EnumSubTopic::B {
+//!     a: "subtopic of subtopic B",
+//! });
+//!
+//! let mut consumer_topic_b = addr
+//!     .consumer_with_filter(
+//!         |t: &EnumSubTopic| matches!(t, EnumSubTopic::B { a } if a == &"subtopic of subtopic B"),
+//!     )
+//!     .await.unwrap();
+//!
+//! # let mut _consumer_topic_a = addr.consumer_with_filter(|t| matches!(t, EnumSubTopic::A)).await.unwrap();
+//! producer_a.send(3).await.unwrap();
+//! let event = consumer_topic_b.recv().await.unwrap();
+//!
+//! assert_eq!(*event.as_ref(), 3);
 //! # });
-use std::{
-    fmt::Display,
-    pin::Pin,
-    task::{Context, Poll},
-};
+//!
+//! ```
+//! ## Stream Consumer
+//! A [Consumer] can be converted to a [futures::Stream].
+//! ```
+//! # use futures::Stream;
+//! # use tokio_test;
+//! # use lug::{EventBus, Topic, Filter};
+//! # use futures_util::StreamExt;
+//! # tokio_test::block_on(async {
+//! # let (addr, _handle) = EventBus::spawn(100);
+//! # struct HelloTopic;
+//! # impl Topic for HelloTopic {
+//! #     type MessageType = String;
+//! # }
+//! let expected_values = vec!["First Message", "Second Message"];
+//!
+//! // Create a consumer and convert it to a stream
+//! let mut consumer = addr.consumer::<HelloTopic>().await
+//!     .unwrap()
+//!     .to_stream()
+//!     .enumerate();
+//! # let producer = addr.producer(HelloTopic);
+//! # producer.send("First Message".to_string()).await.unwrap();
+//! # producer.send("Second Message".to_string()).await.unwrap();
+//!
+//! let mut recovered_values = vec![];
+//! while let Some((i, value)) = consumer.next().await {
+//!     recovered_values.push(value.as_ref().to_owned());
+//!     if i == expected_values.len() - 1 {
+//!         break;
+//!     }
+//! }
+//!
+//! assert_eq!(recovered_values, expected_values);
+//! # });
+//! ```
 
-use futures::{Future, FutureExt, Stream};
-use thiserror::Error;
-use tokio::sync::mpsc::{self};
-use tokio_stream::{wrappers::ReceiverStream, StreamExt};
-
-mod actors;
-pub use actors::event_bus;
-use tokio_util::sync::CancellationToken;
-pub trait Actor
-where
-    Self: 'static + Sized + Send,
-{
-    /// The type of message the actor can receive.
-    type Message: Send;
-
-    /// The type of state the actor holds.
-    type State: Send;
-
-    /// Runs when the actor is started.
-    fn on_start(&self, _state: &mut Self::State) -> impl std::future::Future<Output = ()> + Send {
-        async {}
-    }
-
-    /// Runs when the actor attempts gracefully shutdown.
-    fn on_stop(self, _state: &mut Self::State) -> impl std::future::Future<Output = ()> + Send {
-        async {}
-    }
-
-    /// The [Actor]'s event loop.
-    /// The default implementation simple iterates over a stream of messages and calls [`Actor::handle`] for each message.
-    /// Override this method if the actor needs to handle events other than messages.
-    fn run(
-        self,
-        mut message_stream: impl Stream<Item = Self::Message> + Send + 'static + std::marker::Unpin,
-        mut state: Self::State,
-        cancellation_token: CancellationToken,
-    ) -> impl std::future::Future<Output = ()> + Send {
-        async move {
-            loop {
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => {
-                        self.on_stop(&mut state).await;
-                        break;
-                    },
-                    message = message_stream.next() => {
-                        match message {
-                            Some(message) => self.handle(message, &mut state).await,
-                            None => {
-                                self.on_stop(&mut state).await;
-                                break
-                            },
-                        };
-                    }
-                }
-            }
-        }
-    }
-
-    /// Handle a message sent to the actor.
-    fn handle(
-        &self,
-        message: Self::Message,
-        state: &mut Self::State,
-    ) -> impl std::future::Future<Output = ()> + Send;
-
-    /// Spawn an [Actor] with an initial state.
-    /// The [Actor] will be moved into a tokio task and started.
-    /// Returns a tuple containing an [Addr] to send messages to the actor and an [ActorHandle] to gracefully shutdown the actor.
-    fn spawn<K>(actor: Self, state: Self::State) -> (K, ActorHandle)
-    where
-        K: From<Addr<Self>>,
-    {
-        let (sender, receiver) = mpsc::channel::<Self::Message>(1000);
-
-        let cancellation_token = CancellationToken::new();
-        let actors_cancel_token = cancellation_token.clone();
-
-        let handle = tokio::spawn(async move {
-            let mut state = state;
-            actor.on_start(&mut state).await;
-            actor
-                .run(ReceiverStream::new(receiver), state, actors_cancel_token)
-                .await;
-        });
-
-        let addr = Addr::<Self>::new(sender);
-
-        (
-            addr.into(),
-            ActorHandle {
-                task_handle: handle,
-                cancellation_token,
-            },
-        )
-    }
-}
-
-/// A handle to an actor that can be used to gracefully shutdown the actor or abort it.
-pub struct ActorHandle {
-    task_handle: tokio::task::JoinHandle<()>,
-    cancellation_token: CancellationToken,
-}
-
-impl ActorHandle {
-    /// Abort the actor.
-    /// Internally this calls [`tokio::task::JoinHandle::abort`].
-    pub fn abort(&self) {
-        self.task_handle.abort();
-    }
-
-    /// Gracefully shutdown the actor.
-    /// This cancel's the actor's cancellation token which should call [`Actor::on_stop`] and wait for the actor to finish processing messages.
-    pub async fn graceful_shutdown(self) -> Result<(), tokio::task::JoinError> {
-        self.cancellation_token.cancel();
-        self.task_handle.await
-    }
-}
-
-impl Future for ActorHandle {
-    type Output = Result<(), tokio::task::JoinError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.task_handle.poll_unpin(cx)
-    }
-}
-
-/// An address to send messages to an actor.
-pub struct Addr<A: Actor> {
-    sender: mpsc::Sender<A::Message>,
-}
-
-impl<A: Actor> Clone for Addr<A> {
-    fn clone(&self) -> Self {
-        Addr {
-            sender: self.sender.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-pub struct AddrError<M>(#[source] mpsc::error::SendError<M>);
-
-impl<M> Display for AddrError<M> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Failed to send message to actor")
-    }
-}
-
-impl<A: Actor> Addr<A> {
-    fn new(sender: mpsc::Sender<A::Message>) -> Self {
-        Addr { sender }
-    }
-
-    pub async fn send(&self, message: A::Message) -> Result<(), AddrError<A::Message>> {
-        self.sender.send(message).await.map_err(AddrError)
-    }
-}
+mod actor;
+mod event_bus;
+pub use event_bus::{Consumer, EventBus, Filter, Producer, Topic};

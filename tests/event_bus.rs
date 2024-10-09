@@ -1,13 +1,11 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use lug::event_bus::{Consumer, EventBus, EventBusAddr, EventSinkState, Filter, Topic};
-use lug::Actor;
+use lug::{Consumer, EventBus, Topic};
 
 #[tokio::test]
 async fn event_bus_string() -> anyhow::Result<()> {
-    let (addr, _handle) = Actor::spawn(EventBus::new(100), EventSinkState::new());
-    let addr = EventBusAddr(addr);
+    let (addr, _handle) = EventBus::spawn(100);
 
     struct HelloTopic;
 
@@ -15,7 +13,7 @@ async fn event_bus_string() -> anyhow::Result<()> {
         type MessageType = String;
     }
 
-    let mut consumer: Consumer<HelloTopic> = addr.consumer(Filter::all_subtopics).await?;
+    let mut consumer: Consumer<HelloTopic> = addr.consumer().await?;
 
     let producer = addr.producer(HelloTopic);
     producer
@@ -32,8 +30,7 @@ async fn event_bus_string() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn event_bus_consumer_stream() -> anyhow::Result<()> {
-    let (addr, _handle) = Actor::spawn(EventBus::new(100), EventSinkState::new());
-    let addr = EventBusAddr(addr);
+    let (addr, _handle) = EventBus::spawn(100);
 
     struct HelloTopic;
 
@@ -41,11 +38,7 @@ async fn event_bus_consumer_stream() -> anyhow::Result<()> {
         type MessageType = String;
     }
 
-    let mut consumer = addr
-        .consumer::<HelloTopic, _>(Filter::all_subtopics)
-        .await?
-        .to_stream()
-        .enumerate();
+    let mut consumer = addr.consumer::<HelloTopic>().await?.to_stream().enumerate();
     let producer = addr.producer(HelloTopic);
     producer.send("Hello from topic a".to_string()).await?;
     producer.send("Hello from topic b".to_string()).await?;
@@ -69,8 +62,7 @@ async fn event_bus_consumer_stream() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn event_bus_struct() -> anyhow::Result<()> {
-    let (addr, _handle) = Actor::spawn(EventBus::new(100), EventSinkState::new());
-    let addr = EventBusAddr(addr);
+    let (addr, _handle) = EventBus::spawn(100);
 
     #[derive(PartialEq, Eq, Debug, Clone)]
     struct StructMessage {
@@ -84,9 +76,7 @@ async fn event_bus_struct() -> anyhow::Result<()> {
         type MessageType = StructMessage;
     }
 
-    let mut consumer = addr
-        .consumer::<ComplexTopic, _>(Filter::all_subtopics)
-        .await?;
+    let mut consumer = addr.consumer::<ComplexTopic>().await?;
 
     let producer = addr.producer(ComplexTopic);
 
@@ -105,8 +95,7 @@ async fn event_bus_struct() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn event_bus_topic_values() -> anyhow::Result<()> {
-    let (addr, _handle): (EventBusAddr, _) =
-        Actor::spawn(EventBus::new(100), EventSinkState::new());
+    let (addr, _handle) = EventBus::spawn(100);
 
     #[derive(Hash, Clone, Copy)]
     struct TopicWithValues {
@@ -122,14 +111,10 @@ async fn event_bus_topic_values() -> anyhow::Result<()> {
     let topic_a = TopicWithValues { a: 1, b: 1 };
     let topic_b = TopicWithValues { a: 1, b: 2 };
 
-    let mut consumer_a = addr
-        .consumer::<TopicWithValues, _>(Filter::all_subtopics)
-        .await?;
+    let mut consumer_a = addr.consumer::<TopicWithValues>().await?;
     let producer_a = addr.producer(topic_a);
 
-    let mut consumer_b = addr
-        .consumer::<TopicWithValues, _>(Filter::all_subtopics)
-        .await?;
+    let mut consumer_b = addr.consumer::<TopicWithValues>().await?;
     let producer_b = addr.producer(topic_b);
 
     producer_a.send("Message A".into()).await?;
@@ -152,8 +137,7 @@ async fn event_bus_topic_values() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn event_bus_subtopics() -> anyhow::Result<()> {
-    let (addr, _handle) = Actor::spawn(EventBus::new(100), EventSinkState::new());
-    let addr = EventBusAddr(addr);
+    let (addr, _handle) = EventBus::spawn(100);
 
     #[allow(dead_code)]
     struct SubTopic {
@@ -175,7 +159,7 @@ async fn event_bus_subtopics() -> anyhow::Result<()> {
     let producer_c = addr.producer(subtopic_c);
 
     // We have to give a type hint somewhere here (one of two ways)
-    let mut consumer = addr.consumer(|t: &SubTopic| t.b > 2).await?;
+    let mut consumer = addr.consumer_with_filter(|t: &SubTopic| t.b > 2).await?;
 
     producer_a.send(1).await?;
     producer_b.send(2).await?;
@@ -195,8 +179,7 @@ async fn event_bus_subtopics() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn event_bus_multiple_subtopics() -> anyhow::Result<()> {
-    let (addr, _handle) = Actor::spawn(EventBus::new(100), EventSinkState::new());
-    let addr = EventBusAddr(addr);
+    let (addr, _handle) = EventBus::spawn(100);
 
     #[allow(dead_code)]
     struct SubTopicA {
@@ -230,8 +213,10 @@ async fn event_bus_multiple_subtopics() -> anyhow::Result<()> {
     let producer_c = addr.producer(topic_c);
     let producer_d = addr.producer(topic_d);
 
-    let mut consumer_topic_a = addr.consumer(|t: &SubTopicA| t.b < 3).await?;
-    let mut consumer_topic_b = addr.consumer(|t: &SubTopicB| t.name == "Oscar").await?;
+    let mut consumer_topic_a = addr.consumer_with_filter(|t: &SubTopicA| t.b < 3).await?;
+    let mut consumer_topic_b = addr
+        .consumer_with_filter(|t: &SubTopicB| t.name == "Oscar")
+        .await?;
 
     producer_a.send(1).await?;
     producer_b.send(2).await?;
@@ -260,8 +245,7 @@ async fn event_bus_multiple_subtopics() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn event_bus_enum_topic() -> anyhow::Result<()> {
-    let (addr, _handle) = Actor::spawn(EventBus::new(100), EventSinkState::new());
-    let addr = EventBusAddr(addr);
+    let (addr, _handle) = EventBus::spawn(100);
 
     #[allow(dead_code)]
     enum EnumSubTopic {
@@ -278,12 +262,14 @@ async fn event_bus_enum_topic() -> anyhow::Result<()> {
     });
 
     let mut consumer_topic_b = addr
-        .consumer(
+        .consumer_with_filter(
             |t: &EnumSubTopic| matches!(t, EnumSubTopic::B { a } if a == &"subtopic of subtopic B"),
         )
         .await?;
 
-    let mut _consumer_topic_a = addr.consumer(|t| matches!(t, EnumSubTopic::A)).await?;
+    let mut _consumer_topic_a = addr
+        .consumer_with_filter(|t| matches!(t, EnumSubTopic::A))
+        .await?;
 
     producer_a.send(3).await?;
     let event = consumer_topic_b.recv().await.unwrap();
