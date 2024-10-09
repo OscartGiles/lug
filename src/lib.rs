@@ -182,4 +182,4 @@
 
 mod actor;
 mod event_bus;
-pub use event_bus::{Consumer, EventBus, Filter, Producer, Topic};
+pub use event_bus::{Consumer, EventBus, Filter, Producer, RecoveredEvent, Topic};
