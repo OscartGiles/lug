@@ -33,9 +33,6 @@ jobs:
         with:
           files_yaml: |
             code:
-              - "src/**"
-              - "Cargo.toml"
-              - "Cargo.lock"
               - "**/*"
               - "!**/*.md"
               # - "!docs/**/*"
@@ -55,7 +52,7 @@ jobs:
 
   cargo-clippy:
     needs: determine_changes
-    if: ${{ github.repository == 'OscartGiles/rivelin_extra' && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.repository == 'OscartGiles/lug' && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     name: "cargo clippy | ubuntu"
     steps:
@@ -79,7 +76,7 @@ jobs:
 
   cargo-test-linux:
     needs: determine_changes
-    if: ${{ github.repository == 'OscartGiles/rivelin_extra' && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.repository == 'OscartGiles/lug' && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
     runs-on:
       labels: "ubuntu-latest"
     name: "cargo test | ubuntu"
@@ -104,7 +101,7 @@ jobs:
 
   cargo-test-macos:
     needs: determine_changes
-    if: ${{ github.repository == 'OscartGiles/rivelin_extra' && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.repository == 'OscartGiles/lug' && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
     runs-on:
       labels: "macos-14"
     name: "cargo test | macos"
