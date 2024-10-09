@@ -1,4 +1,4 @@
-use rivelin_actors::{Actor, Addr};
+use lug::{Actor, Addr};
 use tokio::sync::oneshot;
 
 #[derive(Debug)]

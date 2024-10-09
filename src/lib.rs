@@ -1,4 +1,4 @@
-//! rivelin_actors is a tokio based actor framework created for the Rivelin Project.
+//! lug is a tokio based actor framework created for the Rivelin Project.
 //!
 //! ## Actor implementations
 //!
@@ -10,8 +10,8 @@
 //!
 //! ```
 //! # use tokio_test;
-//! # use rivelin_actors::Actor;
-//! # use rivelin_actors::Addr;
+//! # use lug::Actor;
+//! # use lug::Addr;
 
 //! // Create a simple actor that prints a message
 //! struct HelloActor;

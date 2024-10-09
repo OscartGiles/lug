@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use rivelin_actors::event_bus::{Consumer, EventBus, EventBusAddr, EventSinkState, Filter, Topic};
-use rivelin_actors::Actor;
+use lug::event_bus::{Consumer, EventBus, EventBusAddr, EventSinkState, Filter, Topic};
+use lug::Actor;
 
 #[tokio::test]
 async fn event_bus_string() -> anyhow::Result<()> {

@@ -1,6 +1,20 @@
-[workspace]
-resolver = "2"
+[package]
+name = "lug"
+version = "0.1.0"
+edition = "2021"
 
-members = [
-    "rivelin_actors",
-]
+[dependencies]
+futures = "0.3.30"
+thiserror = "1.0.61"
+tokio = { version = "1.38.0", features = ["rt", "macros"] }
+tokio-stream = { version = "0.1.15", features = ["sync"] }
+tokio-util = "0.7.11"
+
+[dev-dependencies]
+anyhow = "1.0.86"
+tokio = { version = "1.38.0", features = ["macros", "test-util"] }
+tokio-test = "0.4.4"
+futures-util = "0.3.30"
+
+[package.metadata.cargo-shear]
+ignored = ["tokio-test"]

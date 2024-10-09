@@ -6,8 +6,8 @@
 //!
 //! ```rust
 //! # use tokio_test;
-//! use rivelin_actors::event_bus::{EventBus, EventBusAddr, EventSinkState, Topic, Filter};
-//! use rivelin_actors::Actor;
+//! use lug::event_bus::{EventBus, EventBusAddr, EventSinkState, Topic, Filter};
+//! use lug::Actor;
 //!
 //! struct HelloTopic;
 //!
@@ -52,8 +52,8 @@
 //!
 //! ```
 //! # use tokio_test;
-//! # use rivelin_actors::event_bus::{EventBus, EventBusAddr, EventSinkState, Topic, Filter};
-//! # use rivelin_actors::Actor;
+//! # use lug::event_bus::{EventBus, EventBusAddr, EventSinkState, Topic, Filter};
+//! # use lug::Actor;
 //! struct TopicA;
 //!
 //! impl Topic for TopicA {
@@ -94,8 +94,8 @@
 //!
 //! ```rust
 //! # use tokio_test;
-//! # use rivelin_actors::event_bus::{EventBus, EventBusAddr, EventSinkState, Topic, Filter};
-//! # use rivelin_actors::Actor;
+//! # use lug::event_bus::{EventBus, EventBusAddr, EventSinkState, Topic, Filter};
+//! # use lug::Actor;
 //! struct SubTopics {
 //!    a: u32,
 //!    b: u32,
@@ -154,8 +154,8 @@
 //!
 //! ```rust
 //! # use tokio_test;
-//! # use rivelin_actors::event_bus::{EventBus, EventBusAddr, EventSinkState, Topic, Filter};
-//! # use rivelin_actors::Actor;
+//! # use lug::event_bus::{EventBus, EventBusAddr, EventSinkState, Topic, Filter};
+//! # use lug::Actor;
 //! # #[allow(dead_code)]
 //! enum EnumSubTopic {
 //!     A,
@@ -192,8 +192,8 @@
 //! [Consumer] can be converted to a [Stream] to receive messages.
 //! ```
 //! # use tokio_test;
-//! # use rivelin_actors::event_bus::{EventBus, EventBusAddr, EventSinkState, Topic, Filter};
-//! # use rivelin_actors::Actor;
+//! # use lug::event_bus::{EventBus, EventBusAddr, EventSinkState, Topic, Filter};
+//! # use lug::Actor;
 //! # use futures_util::StreamExt;
 //! # tokio_test::block_on(async {
 //! # let (addr, handle) = Actor::spawn(EventBus::new(100), EventSinkState::new());
