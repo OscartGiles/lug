@@ -12,7 +12,9 @@ use tokio::sync::{
     mpsc::{self, Receiver},
     oneshot,
 };
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::sync::CancellationToken;
+
+type ConsumerId = u64;
 
 /// A [Topic] is a type which defines a topic that [Producer]s can send messages to and [Consumer]s can receive messages from.
 pub trait Topic: 'static + Send + Sync {
@@ -30,9 +32,14 @@ pub enum EventMessage {
     Event(Event),
     Subscribe {
         topic_id: TypeId,
-        sender: oneshot::Sender<mpsc::Receiver<Event>>,
+        sender: oneshot::Sender<(
+            mpsc::Receiver<Event>,
+            ConsumerId,
+            mpsc::UnboundedSender<(TypeId, ConsumerId)>,
+        )>,
         filter: OptionalBoxedFilter,
     },
+    Stats(oneshot::Sender<EventBusStats>),
 }
 
 impl Debug for EventMessage {
@@ -48,6 +55,7 @@ impl Debug for EventMessage {
                 .field("topic_id", topic_id)
                 .field("sender", sender)
                 .finish(),
+            EventMessage::Stats(_) => f.debug_struct("Request stats").finish(),
         }
     }
 }
@@ -65,13 +73,20 @@ impl EventSender {
     }
 }
 pub(crate) struct EventSinkState {
-    listeners: HashMap<TypeId, Vec<EventSender>>,
+    listeners: HashMap<TypeId, HashMap<ConsumerId, EventSender>>,
+    consumer_id_seed: ConsumerId,
+    drop_consumer_channel: (
+        mpsc::UnboundedSender<(TypeId, ConsumerId)>,
+        mpsc::UnboundedReceiver<(TypeId, ConsumerId)>,
+    ),
 }
 
 impl EventSinkState {
     pub(crate) fn new() -> Self {
         Self {
             listeners: HashMap::new(),
+            consumer_id_seed: 0,
+            drop_consumer_channel: mpsc::unbounded_channel(),
         }
     }
 
@@ -83,14 +98,29 @@ impl EventSinkState {
         let id = (*topic_any).type_id();
 
         self.listeners.get(&id).map(|topic_listeners| {
-            topic_listeners.iter().filter(move |s| {
-                if let Some(filter) = &s.filter {
-                    (filter)(&topic_any)
-                } else {
-                    true
-                }
-            })
+            topic_listeners
+                .iter()
+                .filter(move |(_, s)| {
+                    if let Some(filter) = &s.filter {
+                        (filter)(&topic_any)
+                    } else {
+                        true
+                    }
+                })
+                .map(|(_, s)| s)
         })
+    }
+
+    /// Remove a consumer from the EventBus. No more messages will be sent to the Consumer.
+    fn remove_consumer(&mut self, topic_id: TypeId, consumer_id: ConsumerId) {
+        if let Some(topic_listeners) = self.listeners.get_mut(&topic_id) {
+            topic_listeners.remove(&consumer_id);
+
+            // Remove the topic if there are no more listeners.
+            if topic_listeners.is_empty() {
+                self.listeners.remove(&topic_id);
+            }
+        }
     }
 }
 impl Default for EventSinkState {
@@ -130,6 +160,36 @@ impl Actor for EventBus {
     type Message = EventMessage;
     type State = EventSinkState;
 
+    async fn run(
+        self,
+        mut message_stream: impl Stream<Item = Self::Message> + Send + 'static + std::marker::Unpin,
+        mut state: Self::State,
+        cancellation_token: CancellationToken,
+    ) {
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    self.on_stop(&mut state).await;
+                    break;
+                },
+                message = message_stream.next() => {
+                    match message {
+                        Some(message) => self.handle(message, &mut state).await,
+                        None => {
+                            self.on_stop(&mut state).await;
+                            break
+                        },
+                    };
+                },
+                Some((topic_id, consumer_id)) = state.drop_consumer_channel.1.recv() => {
+
+                    println!("Dropping consumer {:?}", consumer_id);
+                    state.remove_consumer(topic_id, consumer_id);
+                }
+            }
+        }
+    }
+
     async fn handle(&self, message: Self::Message, state: &mut Self::State) {
         match message {
             EventMessage::Event(event) => {
@@ -148,11 +208,21 @@ impl Actor for EventBus {
             } => {
                 let topic_listerners = state.listeners.entry(topic_id).or_default();
                 let (send, receiver) = mpsc::channel(self.channel_capacity);
-                topic_listerners.push(EventSender::new(send, filter));
+                topic_listerners.insert(state.consumer_id_seed, EventSender::new(send, filter));
 
-                if let Err(e) = sender.send(receiver) {
+                if let Err(e) = sender.send((
+                    receiver,
+                    state.consumer_id_seed,
+                    state.drop_consumer_channel.0.clone(),
+                )) {
                     println!("Failed to send receiver: {:?}", e);
                 }
+
+                state.consumer_id_seed += 1; // Allows 2^64 - 1 consumers before overflow
+            }
+            EventMessage::Stats(sender) => {
+                let n_topics = state.listeners.len();
+                sender.send(EventBusStats { n_topics }).unwrap();
             }
         }
     }
@@ -175,16 +245,37 @@ impl<T: Topic> AsRef<T::MessageType> for RecoveredEvent<T> {
     }
 }
 
+/// A wrapper to hold a [Consumer<T>]s event Receiver channel.
+/// When this type is dropped it sends the consumer's consumer_id to the EventBus so it can remove it from its listeners.
+struct ConsumerReceiver {
+    receiver: Receiver<Event>,
+    consumer_id: ConsumerId,
+    drop_sender: mpsc::UnboundedSender<(TypeId, ConsumerId)>,
+    topic_id: TypeId,
+}
+
 /// A Consumer for a topic.
 pub struct Consumer<T: Topic> {
-    receiver: Receiver<Event>,
+    receiver: ConsumerReceiver,
     phantom: PhantomData<T>,
+}
+
+impl Drop for ConsumerReceiver {
+    fn drop(&mut self) {
+        if self
+            .drop_sender
+            .send((self.topic_id, self.consumer_id))
+            .is_err()
+        {
+            // This could fail if the EventBus has already been dropped - which requires no further action required.
+        }
+    }
 }
 
 impl<T: Topic> Consumer<T> {
     /// Receive a message from the topic.
     pub async fn recv(&mut self) -> Option<RecoveredEvent<T>> {
-        self.receiver.recv().await.map(|e| RecoveredEvent {
+        self.receiver.receiver.recv().await.map(|e| RecoveredEvent {
             payload: e.payload,
             phantom: PhantomData,
         })
@@ -194,7 +285,7 @@ impl<T: Topic> Consumer<T> {
     pub fn try_recv(
         &mut self,
     ) -> Result<RecoveredEvent<T>, tokio::sync::mpsc::error::TryRecvError> {
-        self.receiver.try_recv().map(|e| RecoveredEvent {
+        self.receiver.receiver.try_recv().map(|e| RecoveredEvent {
             payload: e.payload,
             phantom: PhantomData,
         })
@@ -202,10 +293,37 @@ impl<T: Topic> Consumer<T> {
 
     /// Convert the consumer to a [Stream].
     pub fn to_stream(self) -> impl Stream<Item = RecoveredEvent<T>> {
-        ReceiverStream::new(self.receiver).map(|elem| RecoveredEvent {
+        // ReceiverStream::new(self.receiver.receiver).map(|elem| RecoveredEvent {
+        //     payload: elem.payload,
+        //     phantom: PhantomData,
+        // })
+
+        ConsumerStream::new(self.receiver).map(|elem| RecoveredEvent {
             payload: elem.payload,
             phantom: PhantomData,
         })
+    }
+}
+
+/// Implement [future::Stream] for [ConsumerReceiver].
+/// This type is used in place of [tokio_stream::ReceiverStream]. It holds a [ConsumerReceiver]
+/// which sends a message to the EventBus when dropped.
+struct ConsumerStream(ConsumerReceiver);
+
+impl ConsumerStream {
+    fn new(receiver: ConsumerReceiver) -> Self {
+        Self(receiver)
+    }
+}
+
+impl futures::Stream for ConsumerStream {
+    type Item = Event;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.0.receiver.poll_recv(cx)
     }
 }
 
@@ -256,8 +374,14 @@ impl EventBusAddr {
             })
             .await?;
 
+        let (recv, consumer_id, drop_sender) = rx.await.unwrap();
         Ok(Consumer {
-            receiver: rx.await.unwrap(),
+            receiver: ConsumerReceiver {
+                receiver: recv,
+                consumer_id,
+                drop_sender,
+                topic_id,
+            },
             phantom: PhantomData,
         })
     }
@@ -272,6 +396,20 @@ impl EventBusAddr {
             topic: Arc::new(topic),
         }
     }
+
+    pub async fn stats(&self) -> Result<EventBusStats, AddrError<EventMessage>> {
+        let (tx, rx) = oneshot::channel();
+
+        self.0.send(EventMessage::Stats(tx)).await?;
+
+        Ok(rx.await.unwrap())
+    }
+}
+
+#[derive(Debug)]
+pub struct EventBusStats {
+    /// Number of registered topics. Decrements when all listeners for a topic are dropped.
+    pub n_topics: usize,
 }
 
 /// A Producer for a topic.

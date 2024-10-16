@@ -29,6 +29,36 @@ async fn event_bus_string() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn drop_consumer() -> anyhow::Result<()> {
+    let (addr, _handle) = EventBus::spawn(100);
+
+    struct HelloTopic;
+
+    impl Topic for HelloTopic {
+        type MessageType = String;
+    }
+
+    {
+        let mut consumers: Vec<Consumer<HelloTopic>> = Vec::new();
+
+        // Create 1000 consumers.
+        for _ in 0..1000 {
+            let new_consumer = addr.consumer().await?;
+            consumers.push(new_consumer);
+        }
+
+        assert_eq!(addr.stats().await?.n_topics, 1);
+
+        // All consumers are dropped. EventBus should now remove listeners
+    }
+
+    tokio::time::sleep(Duration::from_millis(1000)).await; // Sleep to allow consumers to be removed from event bus. ToDo: Make this deterministic.
+    assert_eq!(addr.stats().await?.n_topics, 0);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn event_bus_consumer_stream() -> anyhow::Result<()> {
     let (addr, _handle) = EventBus::spawn(100);
 
