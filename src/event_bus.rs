@@ -32,11 +32,7 @@ pub enum EventMessage {
     Event(Event),
     Subscribe {
         topic_id: TypeId,
-        sender: oneshot::Sender<(
-            mpsc::Receiver<Event>,
-            ConsumerId,
-            mpsc::UnboundedSender<(TypeId, ConsumerId)>,
-        )>,
+        sender: oneshot::Sender<ConsumerReceiver>,
         filter: OptionalBoxedFilter,
     },
     Stats(oneshot::Sender<EventBusStats>),
@@ -72,13 +68,16 @@ impl EventSender {
         Self { sender, filter }
     }
 }
+
+type DropChannel = (
+    mpsc::UnboundedSender<(TypeId, ConsumerId)>,
+    mpsc::UnboundedReceiver<(TypeId, ConsumerId)>,
+);
+
 pub(crate) struct EventSinkState {
     listeners: HashMap<TypeId, HashMap<ConsumerId, EventSender>>,
     consumer_id_seed: ConsumerId,
-    drop_consumer_channel: (
-        mpsc::UnboundedSender<(TypeId, ConsumerId)>,
-        mpsc::UnboundedReceiver<(TypeId, ConsumerId)>,
-    ),
+    drop_consumer_channel: DropChannel,
 }
 
 impl EventSinkState {
@@ -210,11 +209,12 @@ impl Actor for EventBus {
                 let (send, receiver) = mpsc::channel(self.channel_capacity);
                 topic_listerners.insert(state.consumer_id_seed, EventSender::new(send, filter));
 
-                if let Err(e) = sender.send((
+                if let Err(e) = sender.send(ConsumerReceiver {
                     receiver,
-                    state.consumer_id_seed,
-                    state.drop_consumer_channel.0.clone(),
-                )) {
+                    consumer_id: state.consumer_id_seed,
+                    drop_sender: state.drop_consumer_channel.0.clone(),
+                    topic_id,
+                }) {
                     println!("Failed to send receiver: {:?}", e);
                 }
 
@@ -247,7 +247,8 @@ impl<T: Topic> AsRef<T::MessageType> for RecoveredEvent<T> {
 
 /// A wrapper to hold a [Consumer<T>]s event Receiver channel.
 /// When this type is dropped it sends the consumer's consumer_id to the EventBus so it can remove it from its listeners.
-struct ConsumerReceiver {
+#[derive(Debug)]
+pub struct ConsumerReceiver {
     receiver: Receiver<Event>,
     consumer_id: ConsumerId,
     drop_sender: mpsc::UnboundedSender<(TypeId, ConsumerId)>,
@@ -374,14 +375,9 @@ impl EventBusAddr {
             })
             .await?;
 
-        let (recv, consumer_id, drop_sender) = rx.await.unwrap();
+        let receiver = rx.await.unwrap();
         Ok(Consumer {
-            receiver: ConsumerReceiver {
-                receiver: recv,
-                consumer_id,
-                drop_sender,
-                topic_id,
-            },
+            receiver,
             phantom: PhantomData,
         })
     }
