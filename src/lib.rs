@@ -1,4 +1,4 @@
-//! lug is an in-process type safe event-bus bus that uses Rust types to define topics and subtopics.
+//! lug is an in-process type safe event-bus with topics and subtopics.
 //!
 //! ## Topics
 //! The [Topic] trait can be implemented to define a topic.
